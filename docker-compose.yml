@@ -1,0 +1,14 @@
+services:
+  promptlab:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - promptlab-data:/data
+    environment:
+      DB_PATH: /data/promptlab.db
+
+volumes:
+  promptlab-data:
