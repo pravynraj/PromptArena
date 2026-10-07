@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PromptLab</title>
+<style>
+  :root{--bg:#0f1115;--card:#181b22;--line:#2a2f3a;--tx:#e8eaf0;--mut:#8b93a7;--ac:#6ea8fe;--ok:#4ade80;--bad:#f87171}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.5 system-ui,sans-serif}
+  header{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+  h1{margin:0;font-size:18px} .pill{font-size:12px;color:var(--mut);border:1px solid var(--line);padding:2px 10px;border-radius:99px}
+  main{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px 24px;max-width:1200px;margin:auto}
+  @media(max-width:800px){main{grid-template-columns:1fr}}
+  section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+  section.wide{grid-column:1/-1}
+  h2{margin:0 0 10px;font-size:14px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em}
+  label{display:block;color:var(--mut);font-size:12px;margin:8px 0 3px}
+  input,select,textarea{width:100%;background:var(--bg);color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:8px;font:inherit}
+  textarea{min-height:70px;font-family:ui-monospace,monospace;font-size:12px}
+  button{background:var(--ac);color:#0b1020;border:0;border-radius:6px;padding:8px 14px;font-weight:600;cursor:pointer;margin-top:10px}
+  button:disabled{opacity:.5}
+  table{width:100%;border-collapse:collapse;font-size:13px} th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--mut);font-weight:500} .best td{color:var(--ok);font-weight:600}
+  .prompt{display:flex;gap:8px;align-items:center;padding:4px 0}.prompt input{width:auto}
+  .mut{color:var(--mut)} .bar{height:6px;background:var(--line);border-radius:3px;min-width:60px}
+  .bar i{display:block;height:100%;background:var(--ac);border-radius:3px}
+</style>
+</head>
+<body>
+<header><h1>PromptLab <span class="mut">· prompt engineering &amp; LLM evaluation</span></h1><span class="pill" id="prov">…</span></header>
+<main>
+  <section>
+    <h2>1 · Create prompt version</h2>
+    <label>Name</label><input id="pname" value="sentiment">
+    <label>Technique</label><select id="ptech"></select>
+    <label>Instruction</label><textarea id="pinst">Classify the sentiment of the input as positive or negative.</textarea>
+    <label>Few-shot examples (JSON, only for few_shot)</label>
+    <textarea id="pex">[{"input":"I love it","output":"positive"},{"input":"Terrible, hate it","output":"negative"}]</textarea>
+    <button onclick="createPrompt()">Save prompt</button>
+    <span id="pmsg" class="mut"></span>
+  </section>
+
+  <section>
+    <h2>2 · Run experiment</h2>
+    <div id="plist" class="mut">No prompts yet</div>
+    <label>Test cases (JSON: input + expected)</label>
+    <textarea id="tests" style="min-height:110px">[{"input":"Great product, works well","expected":"positive"},{"input":"Worst purchase, totally broken","expected":"negative"},{"input":"Really happy with this","expected":"positive"}]</textarea>
+    <label>Model</label><input id="model" value="claude-haiku-4-5">
+    <label>Scoring</label>
+    <select id="method"><option>contains</option><option>exact</option><option>similarity</option><option>json_valid</option></select>
+    <button id="runbtn" onclick="runExp()">Run experiment</button>
+  </section>
+
+  <section class="wide">
+    <h2>3 · Results</h2>
+    <div id="results" class="mut">Run an experiment to compare prompt versions.</div>
+  </section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const api=async(p,o)=>{const r=await fetch('/api'+p,o&&{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)});
+  if(!r.ok) throw new Error((await r.json()).detail||r.statusText); return r.json()};
+async function init(){
+  const h=await api('/health'); $('prov').textContent='provider: '+h.provider;
+  $('ptech').innerHTML=h.techniques.map(t=>`<option>${t}</option>`).join('');
+  loadPrompts();
+}
+async function loadPrompts(){
+  const ps=await api('/prompts');
+  $('plist').innerHTML=ps.length?ps.map(p=>`<label class="prompt"><input type="checkbox" value="${p.id}" checked>
+    <b>${p.name} v${p.version}</b> <span class="mut">${p.technique}</span></label>`).join(''):'No prompts yet';
+}
+async function createPrompt(){
+  try{
+    const body={name:$('pname').value,technique:$('ptech').value,instruction:$('pinst').value,
+      examples:$('ptech').value==='few_shot'?JSON.parse($('pex').value):[]};
+    const r=await api('/prompts',body); $('pmsg').textContent=` saved ${r.name} v${r.version}`; loadPrompts();
+  }catch(e){$('pmsg').textContent=' '+e.message}
+}
+async function runExp(){
+  const ids=[...document.querySelectorAll('#plist input:checked')].map(i=>+i.value);
+  if(!ids.length){$('results').textContent='Select at least one prompt.';return}
+  $('runbtn').disabled=true; $('results').textContent='Running…';
+  try{
+    const r=await api('/experiments',{prompt_ids:ids,test_cases:JSON.parse($('tests').value),model:$('model').value,method:$('method').value});
+    $('results').innerHTML=`<table><tr><th>Prompt</th><th>Technique</th><th>Score</th><th></th><th>Latency</th><th>Tokens</th><th>Cost</th><th>Errors</th></tr>`+
+      r.summary.map((s,i)=>`<tr class="${i==0?'best':''}"><td>${s.name} v${s.version}${i==0?' ★':''}</td><td>${s.technique}</td>
+      <td>${(s.avg_score*100).toFixed(0)}%</td><td><div class="bar"><i style="width:${s.avg_score*100}%"></i></div></td>
+      <td>${s.avg_latency_ms} ms</td><td>${s.total_tokens}</td><td>$${s.total_cost_usd}</td><td>${s.errors}</td></tr>`).join('')+'</table>';
+  }catch(e){$('results').textContent='Error: '+e.message}
+  $('runbtn').disabled=false;
+}
+init();
+</script>
+</body>
+</html>
